@@ -56,15 +56,21 @@ armor = {
 	timer = 0,
 	elements = {"head", "torso", "legs", "feet"},
 	physics = {"jump","speed","gravity"},
-	formspec = "size[8,8.5]image[2,0.75;2,4;armor_preview]"
-		.."list[current_player;main;0,4.5;8,4;]"
-		.."list[current_player;craft;4,1;3,3;]"
-		.."list[current_player;craftpreview;7,2;1,1;]"
-		.."listring[current_player;main]"
-		.."listring[current_player;craft]",
+	formspec = "size[8,8.5]"..
+		default.gui_bg..
+		default.gui_bg_img..
+		default.gui_slots..
+		default.get_hotbar_bg(0,4.25)..
+		"image[2,0.5;2,4;armor_preview]"..
+		"list[current_player;main;0,4.25;8,1;]"..
+		"list[current_player;main;0,5.5;8,3;8]"..
+		"list[current_player;craft;4,0.5;3,3;]"..
+		"list[current_player;craftpreview;7,1.5;1,1;]"..
+		"listring[current_player;main]"..
+		"listring[current_player;craft]",
 	textures = {},
 	default_skin = "character",
-	version = "0.4.6",
+	version = "0.4.7",
 }
 
 if minetest.get_modpath("inventory_plus") then
@@ -105,6 +111,8 @@ elseif minetest.get_modpath("unified_inventory") then
 	})
 elseif minetest.get_modpath("inventory_enhanced") then
 	inv_mod = "inventory_enhanced"
+elseif minetest.get_modpath("smart_inventory") then
+	inv_mod = "smart_inventory"
 end
 
 if minetest.get_modpath("skins") then
@@ -263,7 +271,7 @@ armor.get_armor_formspec = function(self, name)
 		minetest.log("error", "3d_armor: Armor def["..name.."] is nil [get_armor_formspec]")
 		return ""
 	end
-	local formspec = armor.formspec.."list[detached:"..name.."_armor;armor;0,1;2,3;]"
+	local formspec = armor.formspec.."list[detached:"..name.."_armor;armor;0,0.5;2,3;]"
 	formspec = formspec:gsub("armor_preview", armor.textures[name].preview)
 	formspec = formspec:gsub("armor_level", armor.def[name].level)
 	formspec = formspec:gsub("armor_heal", armor.def[name].heal)
@@ -275,6 +283,13 @@ end
 armor.update_inventory = function(self, player)
 	local name = armor:get_valid_player(player, "[set_player_armor]")
 	if not name or inv_mod == "inventory_enhanced" then
+		return
+	end
+	if inv_mod == "smart_inventory" then
+		local state = smart_inventory.get_page_state("player", name)
+		if state then
+			state:get("update_hook"):submit()
+		end
 		return
 	end
 	if inv_mod == "unified_inventory" then
@@ -496,21 +511,21 @@ if ARMOR_DROP == true or ARMOR_DESTROY == true then
 		end
 		if ARMOR_DESTROY == false then
 			minetest.after(ARMOR_BONES_DELAY, function()
-				local node = minetest.get_node(vector.round(pos))
-				if node then
-					if node.name ~= "bones:bones" then
-						pos.y = pos.y+1
-						node = minetest.get_node(vector.round(pos))
-						if node.name ~= "bones:bones" then
-							minetest.log("warning", "Failed to add armor to bones node.")
-							return
-						end
+				local meta = nil
+				local maxp = vector.add(pos, 8)
+				local minp = vector.subtract(pos, 8)
+				local bones = minetest.find_nodes_in_area(minp, maxp, {"bones:bones"})
+				for _, p in pairs(bones) do
+					local m = minetest.get_meta(p)
+					if m:get_string("owner") == name then
+						meta = m
+						break
 					end
-					local meta = minetest.get_meta(vector.round(pos))
-					local owner = meta:get_string("owner")
+				end
+				if meta then
 					local inv = meta:get_inventory()
 					for _,stack in ipairs(drop) do
-						if name == owner and inv:room_for_item("main", stack) then
+						if inv:room_for_item("main", stack) then
 							inv:add_item("main", stack)
 						else
 							armor.drop_armor(pos, stack)

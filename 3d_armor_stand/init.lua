@@ -98,17 +98,52 @@ local function has_locked_armor_stand_privilege(meta, player)
 	return true
 end
 
+local function add_hidden_node(pos, player)
+	local p = {x=pos.x, y=pos.y + 1, z=pos.z}
+	local name = player:get_player_name()
+	local node = minetest.get_node(p)
+	if node.name == "air" and not minetest.is_protected(pos, name) then
+		minetest.set_node(p, {name="3d_armor_stand:top"})
+	end
+end
+
+local function remove_hidden_node(pos)
+	local p = {x=pos.x, y=pos.y + 1, z=pos.z}
+	local node = minetest.get_node(p)
+	if node.name == "3d_armor_stand:top" then
+		minetest.remove_node(p)
+	end
+end
+
+minetest.register_node("3d_armor_stand:top", {
+	description = "Armor stand top",
+	paramtype = "light",
+	drawtype = "plantlike",
+	sunlight_propagates = true,
+	walkable = true,
+	pointable = false,
+	diggable = false,
+	buildable_to = false,
+	drop = "",
+	groups = {not_in_creative_inventory = 1},
+	on_blast = function() end,
+	tiles = {"3d_armor_trans.png"},
+})
+
 minetest.register_node("3d_armor_stand:armor_stand", {
 	description = "Armor stand",
 	drawtype = "mesh",
 	mesh = "3d_armor_stand.obj",
-	tiles = {"default_wood.png", "default_steel_block.png"},
+	tiles = {"3d_armor_stand.png"},
 	paramtype = "light",
 	paramtype2 = "facedir",
 	walkable = false,
 	selection_box = {
 		type = "fixed",
-		fixed = {-0.5,-0.5,-0.5, 0.5,1.4,0.5}
+		fixed = {
+			{-0.25, -0.4375, -0.25, 0.25, 1.4, 0.25},
+			{-0.5, -0.5, -0.5, 0.5, -0.4375, 0.5},
+		},
 	},
 	groups = {choppy=2, oddly_breakable_by_hand=2},
 	sounds = default.node_sound_wood_defaults(),
@@ -131,8 +166,9 @@ minetest.register_node("3d_armor_stand:armor_stand", {
 		end
 		return true
 	end,
-	after_place_node = function(pos)
+	after_place_node = function(pos, placer)
 		minetest.add_entity(pos, "3d_armor_stand:armor_entity")
+		add_hidden_node(pos, placer)
 	end,
 	allow_metadata_inventory_put = function(pos, listname, index, stack)
 		local def = stack:get_definition() or {}
@@ -153,6 +189,7 @@ minetest.register_node("3d_armor_stand:armor_stand", {
 	end,
 	after_destruct = function(pos)
 		update_entity(pos)
+		remove_hidden_node(pos)
 	end,
 	on_blast = function(pos)
 		local object = get_stand_object(pos)
@@ -169,13 +206,16 @@ minetest.register_node("3d_armor_stand:locked_armor_stand", {
 	description = "Locked Armor stand",
 	drawtype = "mesh",
 	mesh = "3d_armor_stand.obj",
-	tiles = {"default_wood.png", "default_steel_block.png"},
+	tiles = {"3d_armor_stand_locked.png"},
 	paramtype = "light",
 	paramtype2 = "facedir",
 	walkable = false,
 	selection_box = {
 		type = "fixed",
-		fixed = {-0.5,-0.5,-0.5, 0.5,1.4,0.5}
+		fixed = {
+			{-0.25, -0.4375, -0.25, 0.25, 1.4, 0.25},
+			{-0.5, -0.5, -0.5, 0.5, -0.4375, 0.5},
+		},
 	},
 	groups = {choppy=2, oddly_breakable_by_hand=2},
 	sounds = default.node_sound_wood_defaults(),
@@ -205,6 +245,7 @@ minetest.register_node("3d_armor_stand:locked_armor_stand", {
 		meta:set_string("owner", placer:get_player_name() or "")
 		meta:set_string("infotext", "Armor Stand (owned by " ..
 		meta:get_string("owner") .. ")")
+		add_hidden_node(pos, placer)
 	end,
 	allow_metadata_inventory_put = function(pos, listname, index, stack, player)
 		local meta = minetest.get_meta(pos)
@@ -236,6 +277,7 @@ minetest.register_node("3d_armor_stand:locked_armor_stand", {
 	end,
 	after_destruct = function(pos)
 		update_entity(pos)
+		remove_hidden_node(pos)
 	end,
 	on_blast = function(pos)
 		local object = get_stand_object(pos)
@@ -253,7 +295,7 @@ minetest.register_entity("3d_armor_stand:armor_entity", {
 	visual = "mesh",
 	mesh = "3d_armor_entity.obj",
 	visual_size = {x=1, y=1},
-	collisionbox = {-0.1,-0.4,-0.1, 0.1,1.3,0.1},
+	collisionbox = {0,0,0,0,0,0},
 	textures = {"3d_armor_trans.png"},
 	pos = nil,
 	timer = 0,
