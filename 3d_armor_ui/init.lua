@@ -27,6 +27,9 @@ unified_inventory.register_page("armor", {
 	get_formspec = function(player, perplayer_formspec)
 		local fy = perplayer_formspec.formspec_y
 		local name = player:get_player_name()
+		if armor.def[name].init_time == 0 then
+			return {formspec="label[0,0;Armor not initialized!]"}
+		end
 		local formspec = "background[0.06,"..fy..";7.92,7.52;3d_armor_ui_form.png]"..
 			"label[0,0;Armor]"..
 			"list[detached:"..name.."_armor;armor;0,"..fy..";2,3;]"..

@@ -5,6 +5,9 @@ end
 local modname = minetest.get_current_modname()
 local modpath = minetest.get_modpath(modname)
 local worldpath = minetest.get_worldpath()
+local last_punch_time = {}
+local pending_players = {}
+local timer = 0
 
 dofile(modpath.."/api.lua")
 
@@ -54,12 +57,6 @@ for material, _ in pairs(armor.materials) do
 		armor.materials[material] = nil
 	end
 end
-armor.formspec = armor.formspec..
-	"label[5,1;"..S("Level")..": armor_level]"..
-	"label[5,1.5;"..S("Heal")..":  armor_attr_heal]"
-if armor.config.fire_protect then
-	armor.formspec = armor.formspec.."label[5,2;"..S("Fire")..":  armor_fire]"
-end
 
 dofile(modpath.."/armor.lua")
 
@@ -88,6 +85,115 @@ if not minetest.get_modpath("moreores") then
 end
 if not minetest.get_modpath("ethereal") then
 	armor.materials.crystal = nil
+end
+
+-- Armor Initialization
+
+armor.formspec = armor.formspec..
+	"label[5,1;"..S("Level")..": armor_level]"..
+	"label[5,1.5;"..S("Heal")..":  armor_attr_heal]"
+if armor.config.fire_protect then
+	armor.formspec = armor.formspec.."label[5,2;"..S("Fire")..":  armor_fire]"
+end
+armor:register_on_destroy(function(player, index, stack)
+	local name = player:get_player_name()
+	local def = stack:get_definition()
+	if name and def and def.description then
+		minetest.chat_send_player(name, S("Your").." "..def.description.." "..
+			S("got destroyed").."!")
+	end
+end)
+
+local function init_player_armor(player)
+	local name = player:get_player_name()
+	local player_inv = player:get_inventory()
+	local pos = player:getpos()
+	if not name or not player_inv or not pos then
+		return false
+	end
+	local armor_inv = minetest.create_detached_inventory(name.."_armor", {
+		on_put = function(inv, listname, index, stack, player)
+			player:get_inventory():set_stack(listname, index, stack)
+			armor:run_callbacks("on_equip", player, index, stack)
+			armor:set_player_armor(player)
+		end,
+		on_take = function(inv, listname, index, stack, player)
+			player:get_inventory():set_stack(listname, index, nil)
+			armor:run_callbacks("on_unequip", player, index, stack)
+			armor:set_player_armor(player)
+		end,
+		on_move = function(inv, from_list, from_index, to_list, to_index, count, player)
+			local plaver_inv = player:get_inventory()
+			local stack = inv:get_stack(to_list, to_index)
+			player_inv:set_stack(to_list, to_index, stack)
+			player_inv:set_stack(from_list, from_index, nil)
+			armor:set_player_armor(player)
+		end,
+		allow_put = function(inv, listname, index, stack, player)
+			local def = stack:get_definition() or {}
+			local allowed = 0
+			for _, element in pairs(armor.elements) do
+				if def.groups["armor_"..element] then
+					allowed = 1
+					for i = 1, 6 do
+						local item = inv:get_stack("armor", i):get_name()
+						if minetest.get_item_group(item, "armor_"..element) > 0 then
+							return 0
+						end
+					end
+				end
+			end
+			return allowed
+		end,
+		allow_take = function(inv, listname, index, stack, player)
+			return stack:get_count()
+		end,
+		allow_move = function(inv, from_list, from_index, to_list, to_index, count, player)
+			return count
+		end,
+	}, name)
+	armor_inv:set_size("armor", 6)
+	player_inv:set_size("armor", 6)
+	for i=1, 6 do
+		local stack = player_inv:get_stack("armor", i)
+		armor_inv:set_stack("armor", i, stack)
+		armor:run_callbacks("on_equip", player, i, stack)
+	end
+	armor.def[name] = {
+		init_time = minetest.get_gametime(),
+		level = 0,
+		state = 0,
+		count = 0,
+		groups = {},
+	}
+	for _, phys in pairs(armor.physics) do
+		armor.def[name][phys] = 1
+	end
+	for _, attr in pairs(armor.attributes) do
+		armor.def[name][attr] = 0
+	end
+	for group, _ in pairs(armor.registered_groups) do
+		armor.def[name].groups[group] = 0
+	end
+	local skin = armor:get_player_skin(name)
+	armor.textures[name] = {
+		skin = skin..".png",
+		armor = "3d_armor_trans.png",
+		wielditem = "3d_armor_trans.png",
+		preview = armor.default_skin.."_preview.png",
+	}
+	local texture_path = minetest.get_modpath("player_textures")
+	if texture_path then
+		local dir_list = minetest.get_dir_list(texture_path.."/textures")
+		for _, fn in pairs(dir_list) do
+			if fn == "player_"..name..".png" then
+				armor.textures[name].skin = fn
+				break
+			end
+		end
+	end
+	armor:set_player_armor(player)
+	return true
 end
 
 -- Armor Player Model
@@ -127,91 +233,11 @@ end)
 
 minetest.register_on_joinplayer(function(player)
 	default.player_set_model(player, "3d_armor_character.b3d")
-	local name = player:get_player_name()
-	local player_inv = player:get_inventory()
-	local armor_inv = minetest.create_detached_inventory(name.."_armor", {
-		on_put = function(inv, listname, index, stack, player)
-			player:get_inventory():set_stack(listname, index, stack)
-			armor:set_player_armor(player)
-			armor:run_callbacks("on_equip", player, stack)
-		end,
-		on_take = function(inv, listname, index, stack, player)
-			player:get_inventory():set_stack(listname, index, nil)
-			armor:set_player_armor(player)
-			armor:run_callbacks("on_unequip", player, stack)
-		end,
-		on_move = function(inv, from_list, from_index, to_list, to_index, count, player)
-			local plaver_inv = player:get_inventory()
-			local stack = inv:get_stack(to_list, to_index)
-			player_inv:set_stack(to_list, to_index, stack)
-			player_inv:set_stack(from_list, from_index, nil)
-			armor:set_player_armor(player)
-		end,
-		allow_put = function(inv, listname, index, stack, player)
-			local def = stack:get_definition() or {}
-			for _, element in pairs(armor.elements) do
-				if def.groups["armor_"..element] then
-					for i = 1, 6 do
-						local item = inv:get_stack("armor", i):get_name()
-						if minetest.get_item_group(item, "armor_"..element) > 0 then
-							return 0
-						end
-					end
-				end
-			end
-			return 1
-		end,
-		allow_take = function(inv, listname, index, stack, player)
-			return stack:get_count()
-		end,
-		allow_move = function(inv, from_list, from_index, to_list, to_index, count, player)
-			return count
-		end,
-	}, name)
-	armor_inv:set_size("armor", 6)
-	player_inv:set_size("armor", 6)
-	for i=1, 6 do
-		local stack = player_inv:get_stack("armor", i)
-		armor_inv:set_stack("armor", i, stack)
-		armor:run_callbacks("on_equip", player, stack)
-	end
-	armor.def[name] = {
-		level = 0,
-		state = 0,
-		count = 0,
-		groups = {},
-	}
-	for _, phys in pairs(armor.physics) do
-		armor.def[name][phys] = 1
-	end
-	for _, attr in pairs(armor.attributes) do
-		armor.def[name][attr] = 0
-	end
-	for group, _ in pairs(armor.registered_groups) do
-		armor.def[name].groups[group] = 0
-	end
-	local skin = armor:get_player_skin(name)
-	armor.textures[name] = {
-		skin = skin..".png",
-		armor = "3d_armor_trans.png",
-		wielditem = "3d_armor_trans.png",
-		preview = armor.default_skin.."_preview.png",
-	}
-	local texture_path = minetest.get_modpath("player_textures")
-	if texture_path then
-		local dir_list = minetest.get_dir_list(texture_path.."/textures")
-		for _, fn in pairs(dir_list) do
-			if fn == "player_"..name..".png" then
-				armor.textures[name].skin = fn
-				break
-			end
+	minetest.after(0, function(player)
+		if init_player_armor(player) == false then
+			pending_players[player] = 0
 		end
-	end
-	for i=1, armor.config.init_times do
-		minetest.after(armor.config.init_delay * i, function(player)
-			armor:set_player_armor(player)
-		end, player)
-	end
+	end, player)
 end)
 
 minetest.register_on_leaveplayer(function(player)
@@ -220,11 +246,12 @@ minetest.register_on_leaveplayer(function(player)
 		armor.def[name] = nil
 		armor.textures[name] = nil
 	end
+	pending_players[player] = nil
 end)
 
 if armor.config.drop == true or armor.config.destroy == true then
 	minetest.register_on_dieplayer(function(player)
-		local name, player_inv, pos = armor:get_valid_player(player, "[on_dieplayer]")
+		local name, player_inv = armor:get_valid_player(player, "[on_dieplayer]")
 		if not name then
 			return
 		end
@@ -234,11 +261,12 @@ if armor.config.drop == true or armor.config.destroy == true then
 			if stack:get_count() > 0 then
 				table.insert(drop, stack)
 				armor:set_inventory_stack(player, i, nil)
-				armor:run_callbacks("on_unequip", player, stack)
+				armor:run_callbacks("on_unequip", player, i, stack)
 			end
 		end
 		armor:set_player_armor(player)
-		if armor.config.destroy == false then
+		local pos = player:getpos()
+		if pos and armor.config.destroy == false then
 			minetest.after(armor.config.bones_delay, function()
 				local meta = nil
 				local maxp = vector.add(pos, 8)
@@ -270,45 +298,53 @@ if armor.config.drop == true or armor.config.destroy == true then
 	end)
 end
 
-minetest.register_on_player_hpchange(function(player, hp_change)
-	local name, player_inv = armor:get_valid_player(player, "[on_hpchange]")
-	if name and hp_change < 0 then
-		local heal_max = 0
-		local state = 0
-		local items = 0
-		for i=1, 6 do
-			local stack = player_inv:get_stack("armor", i)
-			if stack:get_count() > 0 then
-				local def = stack:get_definition() or {}
-				local use = def.groups["armor_use"] or 0
-				local heal = def.groups["armor_heal"] or 0
-				local item = stack:get_name()
-				stack:add_wear(use)
-				armor:set_inventory_stack(player, i, stack)
-				state = state + stack:get_wear()
-				items = items + 1
-				if stack:get_count() == 0 then
-					local desc = minetest.registered_items[item].description
-					if desc then
-						minetest.chat_send_player(name,
-							S("Your")..desc.." "..S("got destroyed").."!")
-					end
-					armor:set_player_armor(player)
-					armor:run_callbacks("on_unequip", player, stack)
-					armor:run_callbacks("on_destroy", player, stack)
-				end
-				heal_max = heal_max + heal
-			end
+if armor.config.punch_damage == true then
+	minetest.register_on_punchplayer(function(player, hitter,
+			time_from_last_punch, tool_capabilities)
+		local name = player:get_player_name()
+		if name then
+			armor:punch(player, hitter, time_from_last_punch, tool_capabilities)
+			last_punch_time[name] = minetest.get_gametime()
 		end
-		armor.def[name].state = state
-		armor.def[name].count = items
-		heal_max = heal_max * armor.config.heal_multiplier
-		if heal_max >= math.random(100) then
-			hp_change = 0
+	end)
+end
+
+minetest.register_on_player_hpchange(function(player, hp_change)
+	if player and hp_change < 0 then
+		local name = player:get_player_name()
+		if name then
+			local heal = armor.def[name].heal
+			heal = heal * armor.config.heal_multiplier
+			if heal >= math.random(100) then
+				hp_change = 0
+			end
+			-- check if armor damage was handled by fire or on_punchplayer
+			local time = last_punch_time[name] or 0
+			if time == 0 or time + 1 < minetest.get_gametime() then
+				armor:punch(player)
+			end
 		end
 	end
 	return hp_change
 end, true)
+
+minetest.register_globalstep(function(dtime)
+	timer = timer + dtime
+	if timer > armor.config.init_delay then
+		for player, count in pairs(pending_players) do
+			local remove = init_player_armor(player) == true
+			pending_players[player] = count + 1
+			if remove == false and count > armor.config.init_times then
+				minetest.log("warning", "3d_armor: Failed to initialize player")
+				remove = true
+			end
+			if remove == true then
+				pending_players[player] = nil
+			end
+		end
+		timer = 0
+	end
+end)
 
 -- Fire Protection and water breating, added by TenPlus1
 
@@ -338,12 +374,14 @@ if armor.config.water_protect == true or armor.config.fire_protect == true then
 			end
 			-- water breathing
 			if armor.config.water_protect == true then
-				if armor.def[name].water > 0 and player:get_breath() < 10 then
+				if armor.def[name].water > 0 and
+						player:get_breath() < 10 then
 					player:set_breath(10)
 				end
 			end
 			-- fire protection
 			if armor.config.fire_protect == true then
+				local fire_damage = true
 				pos.y = pos.y + 1.4 -- head level
 				local node_head = minetest.get_node(pos).name
 				pos.y = pos.y - 1.2 -- feet level
@@ -352,6 +390,11 @@ if armor.config.water_protect == true or armor.config.fire_protect == true then
 				for _, row in pairs(armor.fire_nodes) do
 					-- check fire protection, if not enough then get hurt
 					if row[1] == node_head or row[1] == node_feet then
+						if fire_damage == true then
+							armor:punch(player, "fire")
+							last_punch_time[name] = minetest.get_gametime()
+							fire_damage = false
+						end
 						if hp > 0 and armor.def[name].fire < row[2] then
 							hp = hp - row[3] * armor.config.update_time
 							player:set_hp(hp)
